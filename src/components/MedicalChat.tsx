@@ -62,7 +62,11 @@ export const MedicalChat: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [apiKey, setApiKey] = useState<string | null>(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('gemini_api_key');
+      const existing = localStorage.getItem('gemini_api_key');
+      if (existing) return existing;
+      const preset = 'AIzaSyBrIwkRlLyVC8GqTOplzGKIAtZNgzTK3dc';
+      localStorage.setItem('gemini_api_key', preset);
+      return preset;
     }
     return null;
   });
