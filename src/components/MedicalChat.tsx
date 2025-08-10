@@ -95,20 +95,12 @@ export const MedicalChat: React.FC = () => {
     }
   }, [apiKey]);
 
-  const callGeminiAPI = async (userMessage: string): Promise<string> => {
+  const callGeminiAPI = async (userMessage: string, langMode: 'tamil' | 'english'): Promise<string> => {
     if (!apiKey) {
       throw new Error('API key not configured');
     }
 
-    const medicalPrompt = `You are Mr.Doctor, a helpful AI medical assistant. Analyze the user's symptoms and provide:
-1. Possible conditions (with likelihood)
-2. Recommended actions
-3. When to seek immediate care
-4. General health advice
-
-Always include appropriate disclaimers about seeking professional medical care. Be helpful but responsible.
-
-User's symptoms: ${userMessage}`;
+    const medicalPrompt = buildPrompt(userMessage, langMode);
 
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`, {
       method: 'POST',
@@ -127,9 +119,9 @@ User's symptoms: ${userMessage}`;
           }
         ],
         generationConfig: {
-          temperature: 0.7,
+          temperature: 0.4,
           topP: 0.8,
-          maxOutputTokens: 1000,
+          maxOutputTokens: 700,
         }
       }),
     });
@@ -139,16 +131,22 @@ User's symptoms: ${userMessage}`;
     }
 
     const data = await response.json();
-    return data.candidates[0]?.content?.parts[0]?.text || 'I apologize, but I could not process your request. Please try again.';
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || 'Sorry, I could not process your request. Please try again.';
   };
 
   const determineSeverity = (content: string): 'low' | 'medium' | 'high' | 'emergency' => {
-    const emergencyKeywords = ['emergency', 'urgent', 'immediate', 'severe pain', 'difficulty breathing'];
-    const highKeywords = ['serious', 'concerning', 'medical attention', 'doctor immediately'];
-    const mediumKeywords = ['monitor', 'watch', 'see a doctor', 'concerning'];
-    
+    const emergencyKeywords = [
+      'emergency', 'urgent', 'immediate', 'severe pain', 'difficulty breathing', 'shortness of breath',
+      'chest pain', 'stroke', 'heart attack', 'unconscious', 'fainting', 'heavy bleeding', 'seizure',
+      'overdose', 'poison', 'suicidal'
+    ];
+    const highKeywords = [
+      'serious', 'concerning', 'doctor immediately', 'very high fever', 'severe', 'cannot breathe', 'blue lips'
+    ];
+    const mediumKeywords = ['monitor', 'watch', 'see a doctor', 'appointment', 'worsening', 'persistent'];
+
     const lowerContent = content.toLowerCase();
-    
+
     if (emergencyKeywords.some(keyword => lowerContent.includes(keyword))) {
       return 'emergency';
     }
@@ -159,6 +157,49 @@ User's symptoms: ${userMessage}`;
       return 'medium';
     }
     return 'low';
+  };
+
+  const detectLanguage = (text: string): 'tamil' | 'english' => {
+    return /[\u0B80-\u0BFF]/.test(text) ? 'tamil' : 'english';
+  };
+
+  const isEmergencyInput = (text: string): boolean => {
+    const keys = [
+      'difficulty breathing','shortness of breath','chest pain','heavy bleeding','unconscious','fainting',
+      'seizure','stroke','poison','overdose','suicidal','severe allergy','anaphylaxis'
+    ];
+    const t = text.toLowerCase();
+    return keys.some(k => t.includes(k));
+  };
+
+  const buildPrompt = (userMessage: string, langMode: 'tamil' | 'english'): string => {
+    const base = `You are Mr.Doctor, a responsible AI medical assistant.
+Goal: Provide crisp, friendly guidance with a bold, confident tone.
+Style rules:
+- Keep answers short and scannable using bullet points.
+- Start with a one-line key assessment.
+- Focus on actions the user can take now.
+- Never provide definitive diagnoses; include a short disclaimer.
+
+Language rules:
+- If langMode="tamil": Reply ONLY in Tanglish (Tamil written using English letters). Do NOT use Tamil script.
+- If langMode="english": Reply in two sections:
+  English:
+  Tanglish: (Tamil written using English letters)
+
+Emergency rule:
+- If the symptoms suggest an emergency, clearly say to seek immediate care first.
+
+Output format:
+- Use short bullets (max ~6).
+- Use brief section labels like: Key Takeaway, Possible Causes, What To Do Now, Red Flags.
+- Avoid markdown code fences.
+
+User's symptoms:
+${userMessage}
+
+Now respond following the language rules for langMode="${langMode}".`;
+    return base;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -176,8 +217,48 @@ User's symptoms: ${userMessage}`;
     setInput('');
     setIsLoading(true);
 
+    const langMode = detectLanguage(userMessage.content);
+
+    // Immediate emergency guidance if needed
+    if (isEmergencyInput(userMessage.content)) {
+      const emergencyTextEnglish = [
+        'Emergency guidance – act now:',
+        '- Call your local emergency number (e.g., 108).',
+        '- Go to the nearest ER immediately.',
+        '- Do not drive yourself if feeling faint or in severe pain.',
+        '- If breathing issues: sit upright and loosen tight clothing.'
+      ].join('\n');
+
+      const emergencyTextTanglish = [
+        'Emergency guidance – ippove seiyunga:',
+        '- Unga local emergency number (108) ku call pannunga.',
+        '- Nearest emergency room ku udaney poonga.',
+        "- Neriya vali illa faint madhri irundha, neenga drive pannaadheenga.",
+        '- Muthirana saatchi/saatcham (breathing) kashtam na, nera utkaarunga; tight dress loosen pannunga.'
+      ].join('\n');
+
+      const contentImmediate = langMode === 'tamil'
+        ? emergencyTextTanglish
+        : `English:\n${emergencyTextEnglish}\n\nTanglish:\n${emergencyTextTanglish}`;
+
+      const immediateMsg: Message = {
+        id: (Date.now() + 0.5).toString(),
+        content: contentImmediate,
+        type: 'assistant',
+        timestamp: new Date(),
+        severity: 'emergency'
+      };
+
+      setMessages(prev => [...prev, immediateMsg]);
+      toast({
+        title: '⚠️ Emergency Alert',
+        description: 'Immediate action recommended. Seek urgent medical care.',
+        variant: 'destructive',
+      });
+    }
+
     try {
-      const response = await callGeminiAPI(userMessage.content);
+      const response = await callGeminiAPI(userMessage.content, langMode);
       const severity = determineSeverity(response);
 
       const assistantMessage: Message = {
@@ -192,17 +273,17 @@ User's symptoms: ${userMessage}`;
 
       if (severity === 'emergency') {
         toast({
-          title: "⚠️ Emergency Alert",
-          description: "Please seek immediate medical attention if experiencing severe symptoms.",
-          variant: "destructive",
+          title: '⚠️ Emergency Alert',
+          description: 'Please seek immediate medical attention.',
+          variant: 'destructive',
         });
       }
     } catch (error) {
       console.error('Error calling Gemini API:', error);
       toast({
-        title: "Error",
-        description: "Failed to get medical analysis. Please check your API key and try again.",
-        variant: "destructive",
+        title: 'Error',
+        description: 'Failed to get medical analysis. Please check your API key and try again.',
+        variant: 'destructive',
       });
     } finally {
       setIsLoading(false);
@@ -249,9 +330,9 @@ User's symptoms: ${userMessage}`;
   return (
     <div className="flex flex-col h-screen bg-gradient-trust">
       {/* Header */}
-      <div className="border-b bg-card shadow-card p-4">
+      <div className="sticky top-0 z-10 border-b bg-card/80 backdrop-blur supports-[backdrop-filter]:bg-card/60 shadow-card p-4">
         <div className="flex items-center gap-3">
-          <img src={medicalIcon} alt="Mr.Doctor" className="h-10 w-10" />
+          <img src={medicalIcon} alt="Mr.Doctor medical chatbot logo" loading="lazy" className="h-10 w-10" />
           <div>
             <h1 className="text-2xl font-bold text-primary">Mr.Doctor</h1>
             <p className="text-sm text-muted-foreground">AI Medical Assistant</p>
@@ -260,7 +341,7 @@ User's symptoms: ${userMessage}`;
       </div>
 
       {/* Chat Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 max-w-3xl mx-auto w-full">
         {messages.map((message) => (
           <div
             key={message.id}
@@ -306,7 +387,7 @@ User's symptoms: ${userMessage}`;
       </div>
 
       {/* Input Form */}
-      <div className="border-t bg-card p-4">
+      <div className="border-t bg-card p-4 max-w-3xl mx-auto w-full">
         <form onSubmit={handleSubmit} className="flex gap-2">
           <Input
             value={input}
