@@ -60,7 +60,12 @@ export const MedicalChat: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('gemini_api_key');
+    }
+    return null;
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
@@ -101,10 +106,11 @@ Always include appropriate disclaimers about seeking professional medical care. 
 
 User's symptoms: ${userMessage}`;
 
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'X-goog-api-key': apiKey,
       },
       body: JSON.stringify({
         contents: [
@@ -226,7 +232,14 @@ User's symptoms: ${userMessage}`;
   };
 
   if (!apiKey) {
-    return <ApiKeyModal onApiKeySubmit={setApiKey} />;
+    return (
+      <ApiKeyModal
+        onApiKeySubmit={(key) => {
+          localStorage.setItem('gemini_api_key', key);
+          setApiKey(key);
+        }}
+      />
+    );
   }
 
   return (
